@@ -2055,8 +2055,21 @@
       <button class="anno-btn" id="eraserBtn" title="Eraser — Remove Highlights">🧹</button>
       <button class="anno-btn" id="clearAllBtn" title="Clear All Annotations">🗑️</button>
       <div class="anno-sep"></div>
+      <button class="anno-btn" id="penToggleBtn" title="Draw on Page">✏️</button>
+      <div class="anno-sep"></div>
       <button class="anno-btn" id="exportPdfBtn" title="Export as PDF">📄 PDF</button>
     </div>
+  </div>
+
+  <!-- ===== DRAWING CANVAS ===== -->
+  <canvas id="drawCanvas"></canvas>
+  <div class="pen-controls" id="penControls">
+    <label title="Pen Color"><input type="color" id="penColor" value="#e53e3e"></label>
+    <label title="Pen Size">
+      <input type="range" id="penSize" min="1" max="12" value="3">
+    </label>
+    <button class="anno-btn" id="undoDrawBtn" title="Undo Last Stroke">↩️</button>
+    <button class="anno-btn" id="clearDrawBtn" title="Clear Drawing">🗑️</button>
   </div>
 
   <!-- ===== NOTES PANEL ===== -->
@@ -2284,9 +2297,73 @@
 
     .notes-save-btn:hover { background: var(--primary-dark); }
 
+    /* ===== Drawing Canvas ===== */
+    #drawCanvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 9990;
+      pointer-events: none;
+      cursor: crosshair;
+    }
+
+    #drawCanvas.active {
+      pointer-events: auto;
+    }
+
+    .pen-controls {
+      display: none;
+      position: fixed;
+      bottom: 24px;
+      right: 90px;
+      z-index: 9999;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 8px 12px;
+      box-shadow: var(--shadow-lg);
+      align-items: center;
+      gap: 10px;
+      animation: toolbarIn 0.2s ease;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .pen-controls.open { display: flex; }
+
+    .pen-controls input[type="color"] {
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      padding: 2px;
+      background: var(--surface);
+    }
+
+    .pen-controls input[type="range"] {
+      width: 80px;
+      accent-color: var(--primary);
+    }
+
+    .pen-controls label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    #penToggleBtn.pen-active {
+      outline: 3px solid var(--red);
+      outline-offset: 2px;
+      background: var(--red-light) !important;
+    }
+
     /* ===== Print / PDF Styles ===== */
     @media print {
-      .anno-toolbar, .notes-panel, .nav, .study-cta { display: none !important; }
+      .anno-toolbar, .notes-panel, .nav, .study-cta, #drawCanvas, .pen-controls { display: none !important; }
       .header { break-after: avoid; }
       .unit { break-inside: avoid; }
       body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -2425,8 +2502,19 @@
       eraserMode = !eraserMode;
       document.body.classList.toggle('eraser-mode', eraserMode);
       this.style.outline = eraserMode ? '3px solid var(--red)' : '';
+      // Activate canvas so eraser clicks register on drawn strokes
+      const canvas = document.getElementById('drawCanvas');
       if (eraserMode) {
         document.querySelectorAll('.highlight-btn').forEach(b => b.classList.remove('active'));
+        canvas.classList.add('active');
+        canvas.style.cursor = 'crosshair';
+        // Deactivate pen mode if it was on
+        if (document.getElementById('penToggleBtn').classList.contains('pen-active')) {
+          document.getElementById('penToggleBtn').click();
+        }
+      } else {
+        canvas.classList.remove('active');
+        canvas.style.cursor = '';
       }
     });
 
@@ -2564,6 +2652,211 @@
       document.getElementById('annoToggle').style.position = 'relative';
       document.getElementById('annoToggle').appendChild(badge);
     }
+
+    // ===== Drawing / Pen Tool =====
+    // Shared drawing state (accessible by eraser)
+    window._drawState = { strokes: [], redraw: null };
+
+    (function initDrawing() {
+      const canvas = document.getElementById('drawCanvas');
+      const ctx = canvas.getContext('2d');
+      const penToggle = document.getElementById('penToggleBtn');
+      const penControls = document.getElementById('penControls');
+      const penColorInput = document.getElementById('penColor');
+      const penSizeInput = document.getElementById('penSize');
+      const undoBtn = document.getElementById('undoDrawBtn');
+      const clearBtn = document.getElementById('clearDrawBtn');
+
+      let drawing = false;
+      let penActive = false;
+      let strokes = window._drawState.strokes;
+      let currentStroke = [];
+
+      function resizeCanvas() {
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        ctx.putImageData(data, 0, 0);
+        redraw();
+      }
+
+      function redraw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        strokes.forEach(function(stroke) {
+          if (stroke.length < 2) return;
+          ctx.beginPath();
+          ctx.strokeStyle = stroke[0].color;
+          ctx.lineWidth = stroke[0].size;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.moveTo(stroke[0].x, stroke[0].y);
+          for (let i = 1; i < stroke.length; i++) {
+            ctx.lineTo(stroke[i].x, stroke[i].y);
+          }
+          ctx.stroke();
+        });
+      }
+
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      window.addEventListener('resize', resizeCanvas);
+      window._drawState.redraw = redraw;
+
+      penToggle.addEventListener('click', function() {
+        penActive = !penActive;
+        canvas.classList.toggle('active', penActive);
+        penToggle.classList.toggle('pen-active', penActive);
+        penControls.classList.toggle('open', penActive);
+        // Deactivate eraser mode if it was on
+        if (penActive && eraserMode) {
+          eraserMode = false;
+          document.body.classList.remove('eraser-mode');
+          document.getElementById('eraserBtn').style.outline = '';
+        }
+      });
+
+      canvas.addEventListener('mousedown', function(e) {
+        // Eraser mode: find and remove stroke near click
+        if (eraserMode) {
+          var ex = e.clientX, ey = e.clientY;
+          var hitIndex = -1;
+          for (var i = strokes.length - 1; i >= 0; i--) {
+            for (var j = 0; j < strokes[i].length; j++) {
+              var dx = strokes[i][j].x - ex, dy = strokes[i][j].y - ey;
+              if (Math.sqrt(dx*dx + dy*dy) < (strokes[i][j].size / 2 + 8)) {
+                hitIndex = i;
+                break;
+              }
+            }
+            if (hitIndex !== -1) break;
+          }
+          if (hitIndex !== -1) {
+            strokes.splice(hitIndex, 1);
+            redraw();
+          }
+          return;
+        }
+        if (!penActive) return;
+        drawing = true;
+        currentStroke = [{
+          x: e.clientX,
+          y: e.clientY,
+          color: penColorInput.value,
+          size: parseInt(penSizeInput.value)
+        }];
+        ctx.beginPath();
+        ctx.strokeStyle = penColorInput.value;
+        ctx.lineWidth = parseInt(penSizeInput.value);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.moveTo(e.clientX, e.clientY);
+      });
+
+      canvas.addEventListener('mousemove', function(e) {
+        if (!drawing) return;
+        currentStroke.push({
+          x: e.clientX,
+          y: e.clientY,
+          color: penColorInput.value,
+          size: parseInt(penSizeInput.value)
+        });
+        ctx.lineTo(e.clientX, e.clientY);
+        ctx.stroke();
+      });
+
+      canvas.addEventListener('mouseup', function() {
+        if (!drawing) return;
+        drawing = false;
+        if (currentStroke.length > 0) {
+          strokes.push(currentStroke);
+          currentStroke = [];
+        }
+      });
+
+      canvas.addEventListener('mouseleave', function() {
+        if (!drawing) return;
+        drawing = false;
+        if (currentStroke.length > 0) {
+          strokes.push(currentStroke);
+          currentStroke = [];
+        }
+      });
+
+      // Touch support
+      canvas.addEventListener('touchstart', function(e) {
+        // Eraser mode: find and remove stroke near touch
+        if (eraserMode) {
+          e.preventDefault();
+          var touch = e.touches[0];
+          var ex = touch.clientX, ey = touch.clientY;
+          var hitIndex = -1;
+          for (var i = strokes.length - 1; i >= 0; i--) {
+            for (var j = 0; j < strokes[i].length; j++) {
+              var dx = strokes[i][j].x - ex, dy = strokes[i][j].y - ey;
+              if (Math.sqrt(dx*dx + dy*dy) < (strokes[i][j].size / 2 + 8)) {
+                hitIndex = i;
+                break;
+              }
+            }
+            if (hitIndex !== -1) break;
+          }
+          if (hitIndex !== -1) {
+            strokes.splice(hitIndex, 1);
+            redraw();
+          }
+          return;
+        }
+        if (!penActive) return;
+        e.preventDefault();
+        var touch = e.touches[0];
+        drawing = true;
+        currentStroke = [{
+          x: touch.clientX,
+          y: touch.clientY,
+          color: penColorInput.value,
+          size: parseInt(penSizeInput.value)
+        }];
+        ctx.beginPath();
+        ctx.strokeStyle = penColorInput.value;
+        ctx.lineWidth = parseInt(penSizeInput.value);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.moveTo(touch.clientX, touch.clientY);
+      }, { passive: false });
+
+      canvas.addEventListener('touchmove', function(e) {
+        if (!drawing) return;
+        e.preventDefault();
+        var touch = e.touches[0];
+        currentStroke.push({
+          x: touch.clientX,
+          y: touch.clientY,
+          color: penColorInput.value,
+          size: parseInt(penSizeInput.value)
+        });
+        ctx.lineTo(touch.clientX, touch.clientY);
+        ctx.stroke();
+      }, { passive: false });
+
+      canvas.addEventListener('touchend', function() {
+        if (!drawing) return;
+        drawing = false;
+        if (currentStroke.length > 0) {
+          strokes.push(currentStroke);
+          currentStroke = [];
+        }
+      });
+
+      undoBtn.addEventListener('click', function() {
+        strokes.pop();
+        redraw();
+      });
+
+      clearBtn.addEventListener('click', function() {
+        strokes = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      });
+    })();
 
   })();
   </script>
